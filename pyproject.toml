@@ -1,0 +1,20 @@
+[project]
+name = "mini-agent-runtime"
+version = "0.1.0"
+description = "从零实现的 AI Agent 运行时，不依赖任何 Agent 框架"
+requires-python = ">=3.11"
+dependencies = [
+    "openai>=1.0.0",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=5.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
