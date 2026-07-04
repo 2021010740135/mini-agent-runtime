@@ -1,7 +1,7 @@
 """Prompt 模板——管理和组装发送给 LLM 的提示词"""
 
-SYSTEM_PROMPT = """You are a helpful AI assistant with access to tools.
-Use tools when needed to answer the user's question accurately."""
-
-TOOL_CALL_PROMPT = """Based on the user's request, decide which tool to call.
-Respond in JSON format with: {"tool": "tool_name", "args": {...}}"""
+SYSTEM_PROMPT = """你是一个友好、专业的 AI 助手。请用简洁清晰的中文回答用户的问题。
+要求：
+- 回答准确、有条理
+- 如果不确定，诚实说明
+- 涉及代码时给出可运行的示例"""
