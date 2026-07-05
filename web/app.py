@@ -111,15 +111,31 @@ def main() -> None:
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("🤔 思考中…"):
-                reply = asyncio.run(
-                    runtime.run_once(
-                        prompt,
-                        user_id=user_id,
-                        session_id=current_sid,
-                    )
-                )
-            st.markdown(reply)
+            placeholder = st.empty()
+            tool_notes: list[str] = []
+
+            async def _stream_to_ui() -> None:
+                full_text = ""
+                async for event in runtime.run_once_stream(
+                    prompt, user_id=user_id, session_id=current_sid,
+                ):
+                    if event["type"] == "text":
+                        full_text += event["content"]
+                        display = full_text
+                        for note in tool_notes:
+                            display += note
+                        placeholder.markdown(display + " ▌")
+                    elif event["type"] == "tool_result":
+                        name = event.get("name", "?")
+                        preview = event.get("content", "")[:200]
+                        tool_notes.append(f"\n\n> 🔧 **{name}**: {preview}")
+                    elif event["type"] == "done":
+                        display = full_text
+                        for note in tool_notes:
+                            display += note
+                        placeholder.markdown(display)
+
+            asyncio.run(_stream_to_ui())
 
         st.rerun()
 

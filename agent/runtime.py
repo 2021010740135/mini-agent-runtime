@@ -1,5 +1,8 @@
 """Agent 运行时——核心循环逻辑."""
 
+from collections.abc import AsyncGenerator
+from typing import Any
+
 from .config import Config
 from .context import ContextManager
 from .decision import DecisionEngine
@@ -100,13 +103,63 @@ class AgentRuntime:
         self.session_manager.save_session(session)
         return reply
 
+    async def run_once_stream(
+        self,
+        user_input: str,
+        user_id: str = "default",
+        session_id: str | None = None,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """流式版单次交互，实时 yield 事件给 CLI / Web 渲染。
+
+        Yields:
+            同 DecisionEngine.run_stream() 的事件格式
+        """
+        session = self._load_or_create_session(user_id, session_id)
+        self.memory.add_user_message(user_input)
+
+        all_msgs = self.memory.get_all_messages()
+        optimized = self.context.optimize(SYSTEM_PROMPT, all_msgs)
+
+        full_reply = ""
+        try:
+            async for event in self.engine.run_stream(optimized):
+                if event["type"] == "text":
+                    full_reply += event["content"]
+                yield event
+        except Exception as e:
+            self.logger.error(f"决策引擎失败: {e}")
+            error_msg = f"[错误] {e}"
+            full_reply = error_msg
+            yield {"type": "text", "content": error_msg}
+            yield {"type": "done"}
+
+        self.memory.add_assistant_message(full_reply)
+        session.context_summary = self.context.summary
+        session.touch()
+        self.session_manager.save_session(session)
+
     def run(self) -> None:
-        """启动 Agent 主循环——交互式对话（带记忆 + 上下文管理 + 工具调用）."""
+        """启动 Agent 主循环——流式交互对话."""
         import asyncio
 
         self._print_welcome()
         session_id = self.create_session("default")
         self.logger.info(f"交互式会话已创建: {session_id}")
+
+        async def _stream_reply(user_input: str) -> None:
+            """流式输出单次回复."""
+            print("\nAI: ", end="", flush=True)
+            async for event in self.run_once_stream(
+                user_input, user_id="default", session_id=session_id,
+            ):
+                if event["type"] == "text":
+                    print(event["content"], end="", flush=True)
+                elif event["type"] == "tool_result":
+                    name = event.get("name", "?")
+                    preview = event.get("content", "")[:120]
+                    print(f"\n  🔧 {name} → {preview}")
+                elif event["type"] == "done":
+                    print()
 
         while True:
             try:
@@ -125,12 +178,11 @@ class AgentRuntime:
                 break
 
             self.logger.info(f"用户输入: {user_input}")
-            reply = asyncio.run(self.run_once(
-                user_input,
-                user_id="default",
-                session_id=session_id,
-            ))
-            print(f"\nAI: {reply}")
+            try:
+                asyncio.run(_stream_reply(user_input))
+            except Exception as e:
+                self.logger.error(f"运行异常: {e}")
+                print(f"\n[错误] {e}")
 
     def _load_or_create_session(self, user_id: str, session_id: str | None) -> Session:
         if session_id:

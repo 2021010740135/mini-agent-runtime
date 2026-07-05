@@ -2,6 +2,7 @@
 
 import json
 import logging
+from collections.abc import AsyncGenerator
 from dataclasses import dataclass, field
 
 from .errors import DecisionError, ToolError
@@ -94,6 +95,117 @@ class DecisionEngine:
             # 执行本轮所有工具调用
             for tc in decision.tool_calls:
                 result = await self._execute_tool_call(tc)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": result,
+                })
+
+        raise DecisionError(
+            f"超过最大迭代次数 ({self.max_iterations})，未得到最终回复"
+        )
+
+    async def run_stream(
+        self, messages: list[dict],
+    ) -> AsyncGenerator[dict, None]:
+        """流式版工具调用循环，实时 yield 文本和工具调用事件。
+
+        Yields:
+            {"type": "text", "content": "..."}   → 逐字文本
+            {"type": "tool_result", "name": "...", "content": "..."}  → 工具结果
+            {"type": "done"}                     → 结束
+
+        Raises:
+            DecisionError: 超过最大迭代次数
+        """
+        import asyncio
+
+        tools = self.registry.get_tools_schema()
+        if not tools:
+            for chunk in self.llm.stream(messages):
+                yield {"type": "text", "content": chunk}
+            yield {"type": "done"}
+            return
+
+        iteration = 0
+
+        while iteration < self.max_iterations:
+            iteration += 1
+            logger.debug(f"决策循环（流式）第 {iteration}/{self.max_iterations} 轮")
+
+            # ── 流式调用 LLM ──
+            collected: dict[int, dict] = {}
+            streamed_text = ""
+            finish_reason = None
+
+            stream = self.llm.client.chat.completions.create(
+                model=self.llm.model,
+                messages=messages,
+                tools=tools,
+                stream=True,
+            )
+
+            for chunk in stream:
+                delta = chunk.choices[0].delta
+                finish_reason = chunk.choices[0].finish_reason or finish_reason
+
+                if delta.content:
+                    streamed_text += delta.content
+                    yield {"type": "text", "content": delta.content}
+                    await asyncio.sleep(0)
+
+                if delta.tool_calls:
+                    for tc in delta.tool_calls:
+                        idx = tc.index
+                        if idx not in collected:
+                            collected[idx] = {"id": "", "name": "", "arguments": ""}
+                        if tc.id:
+                            collected[idx]["id"] = tc.id
+                        if tc.function and tc.function.name:
+                            collected[idx]["name"] = tc.function.name
+                        if tc.function and tc.function.arguments:
+                            collected[idx]["arguments"] += tc.function.arguments
+
+            # ── 构建 assistant 消息 ──
+            assistant_msg: dict = {"role": "assistant"}
+            if streamed_text:
+                assistant_msg["content"] = streamed_text
+
+            # ── 解析 tool_calls ──
+            parsed_calls: list[ToolCall] = []
+            if collected and finish_reason == "tool_calls":
+                tool_call_blocks = []
+                for idx in sorted(collected):
+                    tc_data = collected[idx]
+                    try:
+                        args = json.loads(tc_data["arguments"])
+                    except json.JSONDecodeError:
+                        args = {}
+                    tc = ToolCall(
+                        id=tc_data["id"],
+                        name=tc_data["name"],
+                        arguments=args,
+                    )
+                    parsed_calls.append(tc)
+                    tool_call_blocks.append({
+                        "id": tc_data["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc_data["name"],
+                            "arguments": tc_data["arguments"],
+                        },
+                    })
+                assistant_msg["tool_calls"] = tool_call_blocks
+            messages.append(assistant_msg)
+
+            if not parsed_calls:
+                yield {"type": "done"}
+                return
+
+            # ── 执行工具 ──
+            for tc in parsed_calls:
+                result = await self._execute_tool_call(tc)
+                yield {"type": "tool_result", "name": tc.name, "content": result}
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,

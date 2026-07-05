@@ -23,32 +23,37 @@ def test_runtime_initialization():
 
 
 def test_runtime_chat_flow(tmp_path):
-    """模拟一次完整的对话交互——输入→构造消息→engine.run→输出."""
+    """模拟一次完整的对话交互——输入→流式输出."""
     runtime = _runtime(tmp_path)
 
     mock_reply = "你好！有什么可以帮你的？"
 
-    # engine.run 是 async，必须用 AsyncMock
-    with patch.object(runtime.engine, "run", AsyncMock(return_value=mock_reply)) as mock_run:
+    async def _fake_stream(*args, **kwargs):
+        yield {"type": "text", "content": mock_reply}
+        yield {"type": "done"}
+
+    with patch.object(runtime, "run_once_stream", _fake_stream):
         with patch("builtins.input", side_effect=["你好", "quit"]):
             with patch("builtins.print") as mock_print:
                 runtime.run()
-                mock_run.assert_called_once()
-                # 验证 engine.run 收到的 messages 格式正确
-                call_args = mock_run.call_args[0][0]
-                assert call_args[0]["role"] == "system"
-                assert call_args[1]["role"] == "user"
-                assert call_args[1]["content"] == "你好"
+                # 验证流式文本被逐字打印
+                printed_text = ""
+                for call in mock_print.call_args_list:
+                    args = call[0]
+                    if args:
+                        printed_text += str(args[0])
+                assert mock_reply in printed_text
 
 
 def test_runtime_llm_error_handling(tmp_path):
-    """验证 engine.run 失败时不会崩溃——打印 [错误] 并继续等待输入."""
-    runtime = _runtime(tmp_path)
+    """验证 engine 失败时不会崩溃——打印 [错误] 并继续等待输入."""
 
-    with patch.object(
-        runtime.engine, "run",
-        AsyncMock(side_effect=RuntimeError("模拟失败")),
-    ):
+    async def _fake_error_stream(*args, **kwargs):
+        raise RuntimeError("模拟失败")
+        yield  # unreachable
+
+    runtime = _runtime(tmp_path)
+    with patch.object(runtime, "run_once_stream", _fake_error_stream):
         with patch("builtins.input", side_effect=["测试", "quit"]):
             with patch("builtins.print") as mock_print:
                 runtime.run()
@@ -59,23 +64,23 @@ def test_runtime_llm_error_handling(tmp_path):
 
 
 def test_runtime_empty_input_skipped(tmp_path):
-    """验证空输入被跳过，不触发 engine.run."""
+    """验证空输入被跳过，不触发流式调用."""
     runtime = _runtime(tmp_path)
 
-    with patch.object(runtime.engine, "run", MagicMock()) as mock_run:
+    with patch.object(runtime, "run_once_stream", MagicMock()) as mock_stream:
         with patch("builtins.input", side_effect=["", "  ", "quit"]):
             runtime.run()
-            mock_run.assert_not_called()
+            mock_stream.assert_not_called()
 
 
 def test_runtime_exit_commands(tmp_path):
-    """验证 quit/exit/退出 命令能正常退出，不触发 engine.run."""
+    """验证 quit/exit/退出 命令能正常退出，不触发流式调用."""
     for cmd in ("quit", "exit", "退出"):
         runtime = _runtime(tmp_path)
-        with patch.object(runtime.engine, "run", MagicMock()) as mock_run:
+        with patch.object(runtime, "run_once_stream", MagicMock()) as mock_stream:
             with patch("builtins.input", side_effect=[cmd]):
                 runtime.run()
-                mock_run.assert_not_called()
+                mock_stream.assert_not_called()
 
 
 @pytest.mark.asyncio
