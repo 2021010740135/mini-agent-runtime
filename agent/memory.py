@@ -53,6 +53,10 @@ class MemoryStore:
     def history_count(self) -> int:
         """返回当前存储的消息条数."""
         return len(self.session.messages)
+    
+    def get_all_messages(self) -> list[dict]:
+        """返回完整对话历史（不截断），供 ContextManager 优化使用."""
+        return self.session.get_messages()
 
     def clear(self) -> None:
         """清空记忆."""
