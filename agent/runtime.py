@@ -2,6 +2,7 @@
 
 from .config import Config
 from .context import ContextManager
+from .decision import DecisionEngine
 from .errors import LLMError
 from .llm_client import LLMClient
 from .logger import AgentLogger
@@ -27,10 +28,56 @@ class AgentRuntime:
             keep_recent=6,
             llm_client=self.llm,
         )
+
+        # ── 工具注册（局部导入打破循环依赖）──
+        from tools.calculator import CalculatorTool
+        from tools.mock_search import MockSearchTool
+        from tools.read_docs import ReadDocsTool
+        from tools.registry import ToolRegistry
+        from tools.todo import TodoTool
+
+        self.registry = ToolRegistry()
+        self.registry.register(CalculatorTool())
+        self.registry.register(MockSearchTool())
+        self.registry.register(TodoTool())
+        self.registry.register(ReadDocsTool())
+
+        # ── 决策引擎 ──
+        self.engine = DecisionEngine(
+            llm_client=self.llm,
+            tool_registry=self.registry,
+            max_iterations=5,
+        )
+
         self.logger.info("AgentRuntime 初始化完成")
 
+    async def run_once(self, user_input: str) -> str:
+        """单次交互：用户输入 → LLM（含工具调用）→ 回复。
+
+        Args:
+            user_input: 用户输入文本
+
+        Returns:
+            AI 回复文本
+        """
+        self.memory.add_user_message(user_input)
+
+        all_msgs = self.memory.get_all_messages()
+        optimized = self.context.optimize(SYSTEM_PROMPT, all_msgs)
+
+        try:
+            reply = await self.engine.run(optimized)
+        except Exception as e:
+            self.logger.error(f"决策引擎失败: {e}")
+            reply = f"[错误] {e}"
+
+        self.memory.add_assistant_message(reply)
+        return reply
+
     def run(self) -> None:
-        """启动 Agent 主循环——交互式对话（带记忆 + 上下文管理）."""
+        """启动 Agent 主循环——交互式对话（带记忆 + 上下文管理 + 工具调用）."""
+        import asyncio
+
         self._print_welcome()
 
         while True:
@@ -50,18 +97,7 @@ class AgentRuntime:
                 break
 
             self.logger.info(f"用户输入: {user_input}")
-            self.memory.add_user_message(user_input)
-
-            try:
-                all_msgs = self.memory.get_all_messages()
-                optimized = self.context.optimize(SYSTEM_PROMPT, all_msgs)
-                reply = self.llm.chat(optimized)
-            except LLMError as e:
-                self.logger.error(f"对话失败: {e}")
-                print(f"[错误] {e}")
-                continue
-
-            self.memory.add_assistant_message(reply)
+            reply = asyncio.run(self.run_once(user_input))
             print(f"\nAI: {reply}")
 
     def _print_welcome(self) -> None:
@@ -69,5 +105,6 @@ class AgentRuntime:
         print("=" * 50)
         print("  Mini Agent Runtime")
         print(f"  模型: {self.config.model}")
+        print(f"  可用工具: {', '.join(self.registry.list_tools())}")
         print("  输入 'quit' 或 'exit' 退出")
         print("=" * 50)
