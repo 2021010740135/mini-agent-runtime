@@ -4,6 +4,7 @@ from .config import Config
 from .errors import LLMError
 from .llm_client import LLMClient
 from .logger import AgentLogger
+from .memory import MemoryStore
 from .prompts import SYSTEM_PROMPT
 
 
@@ -19,10 +20,11 @@ class AgentRuntime:
             base_url=self.config.base_url,
             model=self.config.model,
         )
+        self.memory = MemoryStore(max_history=10)
         self.logger.info("AgentRuntime 初始化完成")
 
     def run(self) -> None:
-        """启动 Agent 主循环——交互式对话."""
+        """启动 Agent 主循环——交互式对话（带记忆）."""
         self._print_welcome()
 
         while True:
@@ -42,20 +44,19 @@ class AgentRuntime:
                 break
 
             self.logger.info(f"用户输入: {user_input}")
+            self.memory.add_user_message(user_input)
 
             try:
-                messages = [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": user_input},
-                ]
+                messages = self.memory.get_context(SYSTEM_PROMPT)
                 reply = self.llm.chat(messages)
             except LLMError as e:
                 self.logger.error(f"对话失败: {e}")
                 print(f"[错误] {e}")
                 continue
 
+            self.memory.add_assistant_message(reply)
             print(f"\nAI: {reply}")
-            self.logger.debug(f"AI 回复: {reply}")
+            self.logger.debug(f"AI 回复 (短): {reply[:50]}...")
 
     def _print_welcome(self) -> None:
         """打印欢迎信息."""
