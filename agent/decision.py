@@ -27,6 +27,7 @@ class Decision:
     """LLM 单次决策的结果."""
     content: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    thought: str | None = None
 
     @property
     def is_final(self) -> bool:
@@ -168,6 +169,7 @@ class DecisionEngine:
         decision = Decision(
             content=msg.content,
             tool_calls=parsed_calls,
+            thought=msg.content if parsed_calls else None,
         )
         logger.debug(
             f"决策结果: is_final={decision.is_final}, "

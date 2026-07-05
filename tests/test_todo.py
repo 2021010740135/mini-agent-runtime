@@ -15,8 +15,21 @@ def tool():
 @pytest.mark.asyncio
 async def test_add_task(tool):
     result = await tool.execute(action="add", task="学习 Python")
-    assert "已添加任务 #1" in result
+    assert "#1" in result
     assert "学习 Python" in result
+
+
+@pytest.mark.asyncio
+async def test_add_batch_tasks(tool):
+    """验证批量添加——用逗号分隔多条任务."""
+    result = await tool.execute(action="add", task="写单元测试、整理文档")
+    assert "#1" in result
+    assert "#2" in result
+    assert "写单元测试" in result
+    assert "整理文档" in result
+    # 确认列表中有 2 项
+    list_result = await tool.execute(action="list", task="")
+    assert "共 2 项" in list_result
 
 
 @pytest.mark.asyncio
@@ -125,3 +138,26 @@ def test_to_openai_schema(tool):
     assert props["action"]["enum"] == ["add", "list", "done", "clear"]
     assert "task" in props
     assert schema["function"]["parameters"]["required"] == ["action"]
+
+@pytest.mark.asyncio
+async def test_bind_state_isolates_tasks_between_sessions(tool):
+    """验证同一个 TodoTool 绑定不同 session 状态时不会串数据."""
+    state_one = {}
+    state_two = {}
+
+    tool.bind_state(state_one)
+    await tool.execute(action="add", task="带伞")
+
+    tool.bind_state(state_two)
+    await tool.execute(action="add", task="提交周报")
+
+    tool.bind_state(state_one)
+    list_one = await tool.execute(action="list")
+
+    tool.bind_state(state_two)
+    list_two = await tool.execute(action="list")
+
+    assert "带伞" in list_one
+    assert "提交周报" not in list_one
+    assert "提交周报" in list_two
+    assert "带伞" not in list_two

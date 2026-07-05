@@ -1,0 +1,20 @@
+{
+  "session_id": "16effebc203b40169899a684435066b3",
+  "user_id": "default",
+  "created_at": "2026-07-05T16:28:00.112484",
+  "updated_at": "2026-07-05T16:28:00.125711",
+  "messages": [
+    {
+      "role": "user",
+      "content": "你好"
+    },
+    {
+      "role": "assistant",
+      "content": "你好！有什么可以帮你的？"
+    }
+  ],
+  "context_summary": "",
+  "tool_state": {
+    "todo": []
+  }
+}

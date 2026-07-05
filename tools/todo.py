@@ -1,4 +1,4 @@
-"""待办事项工具——管理内存中的任务列表"""
+"""待办事项工具——管理 session 级任务列表."""
 
 from .base import BaseTool
 
@@ -7,7 +7,7 @@ class TodoTool(BaseTool):
     """管理待办事项列表。
 
     支持操作：add（添加）、list（列出）、done（完成）、clear（清空）。
-    数据存储在实例内存中，进程重启后清空。
+    默认使用实例内存；AgentRuntime 会在每次请求前绑定当前 session 的 tool_state。
     """
 
     name = "todo"
@@ -32,6 +32,14 @@ class TodoTool(BaseTool):
     def __init__(self) -> None:
         super().__init__()
         self._tasks: list[dict] = []  # [{"content": ..., "done": bool}]
+
+    def bind_state(self, tool_state: dict) -> None:
+        """绑定当前 session 的工具状态，确保不同 session 的 todo 隔离."""
+        tasks = tool_state.setdefault("todo", [])
+        if not isinstance(tasks, list):
+            tasks = []
+            tool_state["todo"] = tasks
+        self._tasks = tasks
 
     async def execute(self, **kwargs) -> str:
         """执行待办事项操作。
@@ -64,8 +72,14 @@ class TodoTool(BaseTool):
     def _add(self, task: str) -> str:
         if not task:
             return "错误：添加任务时 task 参数不能为空"
-        self._tasks.append({"content": task, "done": False})
-        return f"已添加任务 #{len(self._tasks)}: {task}"
+        # 按 、或 , 或 ，拆分多条任务
+        import re
+        items = [t.strip() for t in re.split(r"[、,，]", task) if t.strip()]
+        added = []
+        for item in items:
+            self._tasks.append({"content": item, "done": False})
+            added.append(f"#{len(self._tasks)} {item}")
+        return "已添加任务:\n" + "\n".join(f"  {a}" for a in added)
 
     def _list(self, _task: str) -> str:
         if not self._tasks:

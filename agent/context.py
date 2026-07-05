@@ -321,6 +321,10 @@ class ContextManager:
         """获取当前累积的摘要文本."""
         return self._summary
 
+    def set_summary(self, summary: str) -> None:
+        """恢复当前 session 的上下文摘要."""
+        self._summary = summary or ""
+
     def clear(self) -> None:
         """清空摘要状态."""
         self._summary = ""

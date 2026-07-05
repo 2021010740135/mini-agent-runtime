@@ -67,7 +67,8 @@ mini-agent-runtime/
 │   ├── decision.py         # 决策引擎（解析 LLM 输出）
 │   ├── prompts.py          # Prompt 模板
 │   ├── context.py          # 上下文管理
-│   ├── session.py          # 会话管理
+│   ├── session.py          # 单个会话数据模型
+│   ├── session_manager.py  # 多 session 创建、加载、保存、列表与隔离
 │   ├── memory.py           # 记忆管理
 │   ├── logger.py           # 日志模块
 │   └── errors.py           # 自定义异常
@@ -99,23 +100,27 @@ mini-agent-runtime/
 
 ### 4.1 推荐的实现顺序
 
-按模块依赖关系从底层向上实现：
+**核心思路**：先把 Agent 主链路跑通（"用户输入 → LLM → 输出"），再逐步添加记忆、工具等外围能力。这样每个阶段都能看到可运行的成果，而不是到最后才串联。
+
+已完成阶段：
 
 | 阶段 | 模块 | 说明 |
 |------|------|------|
-| **阶段 1** | `agent/errors.py` | 定义异常类层级（已完成骨架） |
-| **阶段 2** | `agent/logger.py` | 日志记录器 |
-| **阶段 3** | `tools/base.py` | 工具抽象基类 |
-| **阶段 4** | `tools/registry.py` | 工具注册中心 |
-| **阶段 5** | 各工具实现 | `calculator.py` → `mock_search.py` → `todo.py` → `read_docs.py` |
-| **阶段 6** | `agent/llm_client.py` | LLM API 封装 |
-| **阶段 7** | `agent/decision.py` | 决策解析逻辑 |
-| **阶段 8** | `agent/prompts.py` | Prompt 模板完善 |
-| **阶段 9** | `agent/context.py` | 上下文管理 |
-| **阶段 10** | `agent/session.py` | 会话持久化 |
-| **阶段 11** | `agent/memory.py` | 记忆管理 |
-| **阶段 12** | `agent/runtime.py` | Agent 主循环，串联所有模块 |
-| **阶段 13** | `main.py` | 入口文件完善 |
+| **阶段 1** | `agent/errors.py` | 定义异常类层级 ✅ |
+| **阶段 2** | `agent/logger.py` | 日志记录器 ✅ |
+| **阶段 3** | `tools/base.py` | 工具抽象基类 ✅ |
+
+待实现阶段（按新顺序）：
+
+| 阶段 | 模块 | 说明 |
+|------|------|------|
+| **阶段 4** | `agent/llm_client.py` | LLM API 封装——先把 LLM 调用跑通，能真正发请求并收到回复 |
+| **阶段 5** | `agent/prompts.py` + `agent/runtime.py` | 组装主循环：「用户输入 → 构造消息 → 调 LLM → 输出回复」 |
+| **阶段 6** | `agent/session.py` + `agent/session_manager.py` + `agent/memory.py` | 实现多 session 管理：创建、加载、保存、列表、恢复，并保证不同窗口上下文隔离 |
+| **阶段 7** | `agent/context.py` | 管理上下文窗口，防止 token 超限 |
+| **阶段 8** | `tools/registry.py` + `tools/base.py` | 完善工具注册中心（依赖注入 Logger） |
+| **阶段 9** | 各工具实现 | `calculator.py` → `mock_search.py` → `todo.py` → `read_docs.py` |
+| **阶段 10** | `agent/decision.py` | 决策引擎——让 Agent 学会解析 LLM 输出，自主调用工具 |
 
 ### 4.2 编码规范
 
@@ -132,6 +137,42 @@ mini-agent-runtime/
 2. **工具可插拔**：新增工具只需继承 `BaseTool`，实现 `execute()`，注册到 `ToolRegistry`
 3. **LLM 解耦**：`LLMClient` 封装所有 API 细节，其他模块不直接接触 `openai` 库
 4. **决策独立**：`DecisionEngine` 解析 LLM 原始输出为结构化决策，屏蔽格式变化
+5. **会话隔离**：Runtime 接收 `user_id/session_id` 后只加载该 session 的消息历史、上下文摘要和工具状态，不读取其他 session 的状态
+6. **状态归属明确**：全局组件负责无状态能力，session 组件负责消息、摘要、待办等会话级状态
+
+### 4.4 多 Session 实现约定
+
+建议新增 `agent/session_manager.py`，职责如下：
+
+- `create_session(user_id: str) -> Session`：创建新 session，并返回唯一 `session_id`
+- `get_session(user_id: str, session_id: str) -> Session`：加载已有 session；不存在时抛出明确异常
+- `save_session(session: Session) -> None`：将 session 写入 JSON 文件
+- `list_sessions(user_id: str) -> list[SessionMeta]`：列出指定用户的历史 session 元信息
+- `delete_session(user_id: str, session_id: str) -> None`：可选，用于清理测试或演示数据
+
+推荐持久化路径：
+
+```text
+data/sessions/<user_id>/<session_id>.json
+```
+
+推荐 JSON 字段：
+
+```json
+{
+  "session_id": "...",
+  "user_id": "...",
+  "created_at": "2026-07-05T10:00:00",
+  "updated_at": "2026-07-05T10:05:00",
+  "messages": [],
+  "context_summary": "",
+  "tool_state": {
+    "todo": []
+  }
+}
+```
+
+`AgentRuntime.run_once()` 建议改为接收 `user_input`、`user_id`、`session_id`。如果 `session_id` 为空则创建新 session；如果存在则加载该 session。一次交互结束后保存 session。
 
 ---
 
@@ -155,6 +196,8 @@ pytest tests/ -v --cov=agent --cov=tools --cov-report=term-missing
 - 每个核心模块至少有一个基础测试用例
 - 工具模块测试应覆盖：实例化、execute() 调用、异常处理
 - Agent 核心模块测试可使用 mock 隔离 LLM 依赖
+- 多 session 测试必须覆盖：创建两个 session、分别写入消息、分别写入 todo 状态、保存、重新加载、确认互不污染
+- session 持久化测试应使用 pytest 的 `tmp_path`，避免污染真实 `data/sessions/` 目录
 - 测试文件命名：`test_<module>.py`
 - 测试函数命名：`test_<功能描述>`
 
@@ -164,7 +207,8 @@ pytest tests/ -v --cov=agent --cov=tools --cov-report=term-missing
 |----------|----------|--------|
 | `test_calculator.py` | CalculatorTool | 工具实例化、name 属性 |
 | `test_tool_registry.py` | ToolRegistry | 注册表初始化 |
-| `test_session.py` | Session | session_id 自动生成 |
+| `test_session.py` | Session | session_id 自动生成、消息追加、拷贝读取 |
+| `test_session_manager.py` | SessionManager | 创建、保存、加载、列表、多 session 隔离、恢复 |
 | `test_context.py` | ContextManager | max_tokens 配置 |
 | `test_decision_parser.py` | DecisionEngine | 引擎实例化 |
 
@@ -189,7 +233,7 @@ pytest tests/ -v --cov=agent --cov=tools --cov-report=term-missing
    - 输入计算问题 → Agent 调用 CalculatorTool
    - 输入搜索问题 → Agent 调用 MockSearchTool
    - 展示多轮工具链式调用
-4. **会话持久化**（30 秒）：展示 `data/sessions/` 下的保存文件
+4. **多 Session 与持久化**（45 秒）：创建窗口 1/窗口 2，展示两个 session 文件和互不影响的上下文/待办状态
 5. **运行测试**（30 秒）：`pytest tests/ -v` 展示全部通过
 6. **代码亮点**（1 分钟）：挑选 2-3 个设计亮点讲解
 

@@ -103,6 +103,15 @@ class TestDecision:
         d = Decision()
         assert d.tool_calls == []
 
+    def test_tool_call_content_exposed_as_thought(self):
+        d = Decision(
+            content="我先查一下资料",
+            thought="我先查一下资料",
+            tool_calls=[ToolCall(id="1", name="search", arguments={"query": "agent"})],
+        )
+        assert d.is_final is False
+        assert d.thought == "我先查一下资料"
+
 
 # ═══════════════════════════════════════
 # ToolCall 数据类
@@ -152,6 +161,20 @@ class TestRun:
         )
         result = await engine.run([{"role": "user", "content": "你好"}])
         assert "你好" in result
+
+    def test_call_llm_sets_thought_for_tool_calls(self, registry):
+        """验证工具调用前的 assistant content 会作为 thought 暴露."""
+        engine = _make_engine(registry, [
+            _make_mock_completion(
+                content="我先查一下资料",
+                tool_calls=[{"id": "c1", "name": "search", "arguments": {"query": "Python"}}],
+            ),
+        ])
+
+        decision = engine._call_llm([{"role": "user", "content": "Python 是什么？"}])
+
+        assert decision.thought == "我先查一下资料"
+        assert decision.tool_calls[0].name == "search"
 
     @pytest.mark.asyncio
     async def test_single_tool_call_then_answer(self, registry):

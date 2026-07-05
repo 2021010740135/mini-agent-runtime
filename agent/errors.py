@@ -19,3 +19,6 @@ class DecisionError(AgentError):
 
 class ContextLimitError(AgentError):
     """上下文超限错误."""
+
+class SessionError(AgentError):
+    """会话创建、加载或持久化相关错误."""
