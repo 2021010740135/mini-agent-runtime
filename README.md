@@ -51,6 +51,8 @@ uv run pytest tests/ -v
 优先保留最近消息，因为细节对追问最重要；工具结果必须放入上下文，否则 LLM 不知道"刚才查到了什么"。
 
 ## 项目结构
+
+```
 mini-agent-runtime/
 ├── agent/                  # 核心：runtime、decision、memory、context、session 等
 ├── tools/                  # 工具：base、registry、calculator、mock_search、todo、read_docs
@@ -58,3 +60,4 @@ mini-agent-runtime/
 ├── tests/                  # 131 条测试
 ├── main.py                 # CLI 入口
 └── .env.example            # 环境变量模板
+```
